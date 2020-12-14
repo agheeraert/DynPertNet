@@ -4,8 +4,11 @@ import seaborn as sns
 import numpy as np
 import pickle as pkl
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 from sklearn.cluster import Birch
+import multiprocessing
+from os import makedirs as mkdir
+from maker import *
+from itertools import combinations
 from os.path import join as jn
 from Bio.PDB.Polypeptide import aa1, aa3
 from Bio.PDB import PDBParser
@@ -18,10 +21,37 @@ t2o = lambda X: three2one[X] if X in three2one else X[0]
 
 class DynPertNet():
     """Class handling dynamical perturbation networks"""
-    def __init__(self, path):
+    def __init__(self):
+        pass
+
+    def create(self, net1, net2):
+        net1 = self.smart_loader(net1)
+        net2 = self.smart_loader(net2)
+        id2label = dict(zip(range(len(net1.nodes())), list(net1.nodes())))
+        pn_signed_adj = nx.to_numpy_array(net2) - nx.to_numpy_array(net1)
+        self.net = nx.from_numpy_array(pn_signed_adj)
+        self.net = nx.relabel_nodes(self.net, id2label)
+
+    def smart_loader(self, net):
+        if type(net) == AANet:
+            return net.net
+        elif type(net) == nx.classes.graph.Graph:
+            return net
+        elif type(net) == str:
+            return nx.read_gpickle(net)
+        else:
+            print('Warning, type of network not detected')
+            return net
+
+    def save(self, output):
+        """Parameters: path: str
+        Saves the network at the given path"""
+        nx.write_gpickle(self.net, output)
+
+    def load(self, input):
         """Parameters: path: str
         Loads the network saved at the given path"""
-        self.net = nx.read_gpickle(path)
+        self.net = nx.read_gpickle(input)
         self.method=None
 
     def apply_threshold(self, threshold):
@@ -32,7 +62,7 @@ class DynPertNet():
         if threshold != None:
             self.copy = self.net.copy()
             edgelist_to_remove = [(u,v) for u, v in self.net.edges() 
-            if self.net.edges()[(u,v)]['weight'] <= threshold]
+            if abs(self.net.edges()[(u,v)]['weight']) <= threshold]
             self.net.remove_edges_from(edgelist_to_remove)
             self.net.remove_nodes_from(list(nx.isolates(self.net)))   
 
@@ -130,7 +160,10 @@ class DynPertNet():
         return np.where(extra==False)[0][-1]*eps+1
 
     def apply_optimal_threshold(self, method, **kwargs):
-        threshold = round(self.get_optimal_threshold(method, **kwargs), 2)
+        threshold = self.get_optimal_threshold(method, **kwargs)
+        if threshold == None:
+            threshold = 0
+        threshold = round(threshold, 2)
         self.method = method
         print('Optimal threshold for method {0}: {1}'.format(method.capitalize(), threshold))
         self.apply_threshold(threshold)
@@ -168,8 +201,6 @@ class DynPertNet():
                 self.current_threshold, self.method))
         else:
             ax.set_title("Network at threshold {0}".format(self.current_threshold))
-
-
 
         if not self.pos_2D:
             self.pos_2D(pdb_path)
@@ -266,16 +297,182 @@ class DynPertNet():
         for u in self.net.nodes():
             output.write('draw sphere { '+self.pos_3D[u]+' } radius '+str(norm)+' \n')
         output.close()
-
     
+    def line_draw(self, ax=None, quantity='weight', title=None):
+
+        if ax == None:
+            ax = plt.gca()
+
+        if title == None:
+            title = str(quantity).capitalize()
+
+        if quantity == 'absweight':
+            adjacency = nx.to_numpy_matrix(self.net)
+            q = np.sum(adjacency, axis=-1)/2
+
+        else:
+            if quantity != 'weight': 
+                print("""Quantity to plot in line draw not recognized, 
+                computing weights instead""")
+            adjacency = nx.to_numpy_matrix(self.net)
+            colors = nx.get_edge_attributes(self.net, 'color')
+            sign = {edge: 2*(colors[edge] == 'r') - 1 for edge in colors}
+            nx.set_edge_attributes(self.net, sign, 'sign')
+            signs = nx.to_numpy_matrix(self.net, weight='sign')
+            adjacency = np.multiply(adjacency,signs)
+            q = np.sum(adjacency, axis=-1)/2
+
+        ids = [int(node[1:-2]) for node in self.net.nodes()]
+        ax.set_title(title)
+        ax.plot(ids, q, color='k')
+        ax.set_xlabel('Residue number')
+        return ids, q
+            
+def create_dpn(traj1, traj2, topo=None, topo1=None, topo2=None, selection='all', cutoff=5, out1=None, out2=None):
+    if topo:
+        topo1, topo2 = topo, topo
+    aanet1 = create_aanet(traj1, topo=topo1, selection=selection, cutoff=cutoff)
+    if out1:
+        aanet1.save(out1)
+    aanet2 = create_aanet(traj2, topo=topo2, selection=selection, cutoff=cutoff)
+    if out2:
+        aanet2.save(out2)
+    dpn = DynPertNet()
+    dpn.create(aanet1, aanet2)
+    return dpn
+ 
+def create_dpn_parallel(traj_list, topo_list, selection='all', cutoff=5, output_folder=None, name_list=None):
+    n_cpu = multiprocessing.cpu_count()
+    n_trajs = len(traj_list)
+    if type(topo_list) != list:
+        topo_list = [topo_list]*n_trajs
+    if output_folder == None or name_list==None:
+        output_list = [None]*n_trajs
+    else:
+        output_list = [jn(output_folder, '{0}.p'.format(name)) for name in name_list]
+
+    selection = [selection]*n_trajs
+    cutoff = [cutoff]*n_trajs
+
+    pool = multiprocessing.Pool(processes=min(n_cpu, n_trajs))
+    networks = pool.starmap(create_aan_parallel, zip(traj_list, topo_list, selection, cutoff, output_list))
+    dpn = []
+    for i, j in combinations(range(len(networks)), 2):
+        dpn = DynPertNet()
+        dpn.create(networks[i], networks[j])
+        if output_folder != None:
+            dpn.save(jn(output_folder, '{0}v{1}.p'.format(name_list[i], name_list[j])))
+     
+
+def create_aan_parallel(traj, topo, selection, cutoff, output):
+    aanet = AANet()
+    aanet.create(traj, topo, selection, cutoff)
+    if output != None:
+        aanet.save(output)
+    return aanet.net
+
+def create_dpn_from_pickle(inp1, inp2):
+    dpn = DynPertNet()
+    dpn.create(inp1, inp2)
+    return dpn
+
+def load_dpn(path):
+    dpn = DynPertNet()
+    dpn.load(path)
+    return dpn
+
+def create_list(traj1, traj2, selectionList, topo=None, topo1=None, topo2=None, selection='all', cutoff=5, output_atomic=None, output_aanet=None, output=None):
+    if topo:
+        topo1, topo2 = topo, topo
+    aanet1_list = create_aanet_list(traj1, selectionList=selectionList, topo=topo1, selection=selection, cutoff=cutoff, output_atomic=output_atomic[0], output_list=output_aanet[0])
+    aanet2_list = create_aanet_list(traj2, selectionList=selectionList, topo=topo2, selection=selection, cutoff=cutoff, output_atomic=output_atomic[1], output_list=output_aanet[1])
+    dpn_list, i = [], 0
+    for aanet1, aanet2 in zip(aanet1_list, aanet2_list):
+        dpn = DynPertNet()
+        dpn.create(aanet1, aanet2)
+        dpn_list.append(dpn)
+        try:
+            dpn.save(output[i])
+        except Exception as e: print(e)
+        i+=1
+
+    return dpn_list
+
+def create_default(traj1, traj2, topo, output_folder, name1, name2):
+    selectionList = ['all', 'not hydrogen', 'backbone || name H HA', 'backbone', 'sidechain', 'sidechain && not hydrogen', ['all', 'name H N']]
+    outs = ['allH', 'all', 'backboneH', 'backbone', 'sidechainH', 'sidechain', 'amide_proton']
+    mkdir(jn(output_folder, 'atomic'), exist_ok=True)
+    output_atomic = [jn(output_folder, 'atomic', '{0}.p'.format(name)) for name in [name1, name2]]
+    mkdir(jn(output_folder, 'aa_networks'), exist_ok=True)
+    output_aanet = [[jn(output_folder, 'aa_networks', '{0}_{1}.p'.format(selection, name1)) for selection in outs],
+                   [jn(output_folder, 'aa_networks', '{0}_{1}.p'.format(selection, name2)) for selection in outs]]
+    output = [jn(output_folder, '{0}.p'.format(selection)) for selection in outs]
+
+    dpn_list = create_list(traj1, traj2, selectionList, topo=topo, selection='all', cutoff=5, output_atomic=output_atomic, output_aanet=output_aanet, output=output)
+
+    return dpn_list
+    
+
+
+
+if __name__ == '__main__':
+    DIR = '/home/aria/landslide/MDRUNS/IVAN_IGPS'
+    output_folder = '/home/aria/landslide/RESULTS/GUIDELINES/NEW_ALGORITHM/TEST'
+    name1 = 'apo'
+    name2 = 'holo'
+    traj1=[jn(DIR, 'prot_apo_sim{0}_s10.dcd'.format(i)) for i in range(1,5)]
+    traj2=[jn(DIR, 'prot_prfar_sim{0}_s10.dcd'.format(i)) for i in range(1,5)]
+    topo = jn(DIR, 'prot.prmtop')
+    create_default(traj1, traj2, topo, output_folder, name1, name2)
+
+
+
+    #OLDER TESTS
+
+    # DIR = '/home/aria/landslide/MDRUNS/YEAST/all_trajs'
+
+    # # dpn = create_dpn(traj1=jn(DIR, 'model1_apo.dcd'),
+    # #                       traj2=jn(DIR, 'model1_holo_protein.dcd'),
+    # #                       topo='/home/aria/landslide/FRAMES/YEAST/ALLH/APO/frame_1.pdb',
+    # #                       selection="not hydrogen",
+    # #                       out1='data/apo1.p',
+    # #                       out2='data/holo1.p')
+    # ###
+    # dpn = create_dpn_from_pickle("data/apo1.p", "data/holo1.p")
+    # #dpn.save("data/dpn1.p")
+    # dpn = load_dpn("data/dpn1.p")
+    # dpn.load_pos_2D('data/yeast_IGPS_pos.p') #Precomputed 2D projection
+    # dpn.get_pos_3D('data/frame_1.pdb') #Computing directly on the frame
+
+    # method_list = ['tail', 'cluster', 'component']
+
+    # fig, axs = plt.subplots(2, 2, figsize=[15, 10])
+    # plt.subplots_adjust(wspace=0.05, hspace=0.1) #Helps reducing margins
+    
+    # #Drawing first a network at threshold 6
+    # old_threshold = 6
+    # dpn.apply_threshold(old_threshold)
+    # dpn.draw(ax=axs[0, 0])
+    # dpn.reset()
+
+    # #Then drawing networks at optimum thresholds
+    # for method, ax in zip(method_list, axs.reshape(-1)[1:]):
+    #     dpn.apply_optimal_threshold(method)
+    #     dpn.draw(ax=ax)
+    #     dpn.reset()
+    # #bbox_inches=tight allows to remove white space around the networks
+    # plt.savefig(jn('data', 'plot_2d_new.png'), bbox_inches='tight')
+
+"""
 if __name__ == '__main__':
     #Loading the dynamical perturbation network (0.p)
-    dpn = DynPertNet('data/all_full.p')
+    dpn = DynPertNet()
+    dpn.load('data/all_full.p')
     #Loading positions for 2D and 3D plots
     dpn.load_pos_2D('data/yeast_IGPS_pos.p') #Precomputed 2D projection
     dpn.get_pos_3D('data/frame_1.pdb') #Computing directly on the frame
 
-    """Here I present Some simple examples"""
+    #Here I present Some simple examples
 
     # Apply a given threshold (here 6)
     dpn.apply_threshold(6)
@@ -299,7 +496,7 @@ if __name__ == '__main__':
     # Resetting the network to its original form (without threshold)
     dpn.reset() #Don't forget this step it can lead to some errors
 
-    """Here I use 4 differents methods in a row"""
+    "Here I use 4 differents methods in a row"
     method_list = ['tail', 'cluster', 'component']
 
     fig, axs = plt.subplots(2, 2, figsize=[15, 10])
@@ -340,7 +537,15 @@ if __name__ == '__main__':
         dpn.reset()
     #bbox_inches=tight allows to remove white space around the networks
     plt.savefig(jn('data', 'plot_2d.png'), bbox_inches='tight')
+    plt.close()
 
+    #Drawing line plot of weights and comparing time
+    fig, axs = plt.subplots(2, 1)
+    ids, q1 = dpn.line_draw(ax=axs[0], quantity='weight', title='Weight of each node in the perturbation network')
+    ids, q2 = dpn.line_draw(ax=axs[1], quantity='absweight', title='Absolute weight of each node in the perturbation network')
+    plt.tight_layout()
+    plt.savefig('data/line_plots.png')
+    print(ids, q1, q2) """
 
 
 
