@@ -1,8 +1,10 @@
+from multiprocessing import process
 import networkx as nx 
 import numpy as np
 from scipy.spatial import cKDTree
 import mdtraj as md
 import pickle as pkl
+import multiprocessing
 from os.path import join as jn
 from Bio.PDB.Polypeptide import aa1, aa3
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
@@ -61,6 +63,52 @@ class AANet():
         self.net = nx.from_numpy_array(self.average)
         #Labeling the network
         self.net = nx.relabel_nodes(self.net, self.id2label, copy=False)
+    
+    def create_parallel(self, traj, topo=None, selection='all', cutoff=5, n_procs=1):
+        t = md.load(traj, top=topo)
+        if selection != 'all':
+            t = t.atom_slice(t.topology.select(selection))
+        #Creating our topological matrix
+        n_atoms, n_residues = t.topology.n_atoms, t.topology.n_residues
+        labels = list(map(label, t.topology.residues))
+        self.id2label = dict(zip(list(range(n_residues)), labels))
+
+        top_mat = np.zeros((n_atoms, n_residues))        
+        for atom in t.topology.atoms:
+            top_mat[atom.index, atom.residue.index] = 1
+        top_mat = csr_matrix(top_mat)
+
+        #Getting the atomic contacts
+        coords = t.xyz
+        #Chunk the contacts
+        coords = np.array_split(coords, n_procs)
+
+        def create_chunk(coords):
+            contacts = 0
+            n_frames = coords.shape[0]
+            for frame in tqdm(n_frames):
+                #Here we're using the cPython KDTree algorithm to get the neighbors
+                tree = cKDTree(coords[frame])
+                pairs = tree.query_pairs(r=cutoff/10.) #Cutoff is in Angstrom but mdtraj uses nm
+                #Creating sparse CSR matrix
+                data = np.ones(len(pairs))
+                pairs = np.array(list(pairs))
+                atoms = csr_matrix((data, (pairs[:,0], pairs[:,1])), shape=[n_atoms, n_atoms])
+                #R=T^t.A.T where R is residue contact matrix, A si atomic contact matrix and T our topological matrix
+                contacts.append(csr_matrix(np.dot(top_mat.transpose(), atoms.dot(top_mat))))            
+            #Computing average from list of csr matrices
+            average = np.zeros((n_residues, n_residues))
+            for mat in self.contacts:
+                average[mat.nonzero()] += mat.data
+            return average
+        
+        pool = multiprocessing.Pool(processes=n_procs)
+        chunk_contacts = pool.map(create_chunk, coords)
+        self.average = sum(chunk_contacts)/t.n_frames
+        self.net = nx.from_numpy_array(self.average)
+        #Labeling the network
+        self.net = nx.relabel_nodes(self.net, self.id2label, copy=False)
+
 
     def create_atomic(self, traj,  baseSelection, topo=None, cutoff=5):
         """Function creating the atomic contact network with a desired base selection.
@@ -167,7 +215,7 @@ def load_aanet(input):
     aanet.load(input)
     return aanet
 
-def create_aanet_list(traj, selectionList, topo=None, selection='all', cutoff=5, output_atomic=None, output_list = None):
+def create_aanet_multiselection(traj, selectionList, topo=None, selection='all', cutoff=5, output_atomic=None, output_list = None):
     selection = selection.replace("not hydrogen", "!(name =~'H.*')")
     aanet = AANet()
     aanet.create_atomic(traj, baseSelection=selection, topo=topo, cutoff=cutoff)
@@ -189,7 +237,7 @@ if __name__ == '__main__':
     # topo = jn(DIR, 'prot.prmtop')
     # apo1b_way1 = create_aanet(traj, topo=topo, selection='backbone', cutoff=5)
     # apo1b_way1.save(jn(RESULTS, 'apo1b_way1.p'))
-    # apo1_way2 = create_aanet_list(traj, ['backbone'], topo=topo, selection='all', cutoff=5,
+    # apo1_way2 = create_aanet_multiselection(traj, ['backbone'], topo=topo, selection='all', cutoff=5,
     #                         output_atomic=jn(RESULTS, 'apo1_atomic.p'),
     #                         output_list=[jn(RESULTS, 'apo1b_way2.p')])
     # diff = nx.to_numpy_array(apo1b_way1.net) - nx.to_numpy_array(apo1_way2[0])
@@ -208,7 +256,7 @@ if __name__ == '__main__':
     outs = ['allH', 'all', 'backboneH', 'backbone', 'sidechainH', 
     'sidechain', 'amide_proton']
     RESULTS = '/home/aria/landslide/RESULTS/GUIDELINES/NEW_ALGORITHM'
-    create_aanet_list(apo_trajs,
+    create_aanet_multiselection(apo_trajs,
                       selectionList=sels,                    
                       topo=jn(DIR, 'prot.prmtop'),
                       selection='all',

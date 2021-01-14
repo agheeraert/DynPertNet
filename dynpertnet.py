@@ -350,18 +350,21 @@ def create_dpn_parallel(traj_list, topo_list, selection='all', cutoff=5, output_
         output_list = [None]*n_trajs
     else:
         output_list = [jn(output_folder, '{0}.p'.format(name)) for name in name_list]
+        mkdir(output_folder, exist_ok=True)
 
     selection = [selection]*n_trajs
     cutoff = [cutoff]*n_trajs
 
     pool = multiprocessing.Pool(processes=min(n_cpu, n_trajs))
     networks = pool.starmap(create_aan_parallel, zip(traj_list, topo_list, selection, cutoff, output_list))
-    dpn = []
+    dpn_list = []
     for i, j in combinations(range(len(networks)), 2):
         dpn = DynPertNet()
         dpn.create(networks[i], networks[j])
         if output_folder != None:
             dpn.save(jn(output_folder, '{0}v{1}.p'.format(name_list[i], name_list[j])))
+        dpn_list.append(dpn)
+    return dpn_list
      
 
 def create_aan_parallel(traj, topo, selection, cutoff, output):
@@ -370,6 +373,7 @@ def create_aan_parallel(traj, topo, selection, cutoff, output):
     if output != None:
         aanet.save(output)
     return aanet.net
+
 
 def create_dpn_from_pickle(inp1, inp2):
     dpn = DynPertNet()
@@ -381,11 +385,11 @@ def load_dpn(path):
     dpn.load(path)
     return dpn
 
-def create_list(traj1, traj2, selectionList, topo=None, topo1=None, topo2=None, selection='all', cutoff=5, output_atomic=None, output_aanet=None, output=None):
+def create_multiselection(traj1, traj2, selectionList, topo=None, topo1=None, topo2=None, selection='all', cutoff=5, output_atomic=None, output_aanet=None, output=None):
     if topo:
         topo1, topo2 = topo, topo
-    aanet1_list = create_aanet_list(traj1, selectionList=selectionList, topo=topo1, selection=selection, cutoff=cutoff, output_atomic=output_atomic[0], output_list=output_aanet[0])
-    aanet2_list = create_aanet_list(traj2, selectionList=selectionList, topo=topo2, selection=selection, cutoff=cutoff, output_atomic=output_atomic[1], output_list=output_aanet[1])
+    aanet1_list = create_aanet_multiselection(traj1, selectionList=selectionList, topo=topo1, selection=selection, cutoff=cutoff, output_atomic=output_atomic[0], output_list=output_aanet[0])
+    aanet2_list = create_aanet_multiselection(traj2, selectionList=selectionList, topo=topo2, selection=selection, cutoff=cutoff, output_atomic=output_atomic[1], output_list=output_aanet[1])
     dpn_list, i = [], 0
     for aanet1, aanet2 in zip(aanet1_list, aanet2_list):
         dpn = DynPertNet()
@@ -408,7 +412,7 @@ def create_default(traj1, traj2, topo, output_folder, name1, name2):
                    [jn(output_folder, 'aa_networks', '{0}_{1}.p'.format(selection, name2)) for selection in outs]]
     output = [jn(output_folder, '{0}.p'.format(selection)) for selection in outs]
 
-    dpn_list = create_list(traj1, traj2, selectionList, topo=topo, selection='all', cutoff=5, output_atomic=output_atomic, output_aanet=output_aanet, output=output)
+    dpn_list = create_multiselection(traj1, traj2, selectionList, topo=topo, selection='all', cutoff=5, output_atomic=output_atomic, output_aanet=output_aanet, output=output)
 
     return dpn_list
     
@@ -416,14 +420,25 @@ def create_default(traj1, traj2, topo, output_folder, name1, name2):
 
 
 if __name__ == '__main__':
+
     DIR = '/home/aria/landslide/MDRUNS/IVAN_IGPS'
-    output_folder = '/home/aria/landslide/RESULTS/GUIDELINES/NEW_ALGORITHM/TEST'
-    name1 = 'apo'
-    name2 = 'holo'
-    traj1=[jn(DIR, 'prot_apo_sim{0}_s10.dcd'.format(i)) for i in range(1,5)]
-    traj2=[jn(DIR, 'prot_prfar_sim{0}_s10.dcd'.format(i)) for i in range(1,5)]
-    topo = jn(DIR, 'prot.prmtop')
-    create_default(traj1, traj2, topo, output_folder, name1, name2)
+    traj_list = [[jn(DIR, 'prot_apo_sim{0}_s10.dcd'.format(i)) for i in range(1,5)], [jn(DIR, 'prot_prfar_sim{0}_s10.dcd'.format(i)) for i in range(1,5)]]
+    topo_list = jn(DIR, 'prot.prmtop')
+    output_folder = '/home/aria/landslide/RESULTS/GUIDELINES/NEW_ALGORITHM/PARALLEL_TEST'
+    name_list = ['apo', 'holo']
+    create_dpn_parallel(traj_list, topo_list, selection='all', cutoff=5, output_folder=output_folder, name_list=name_list)
+
+
+
+    ##### TEST MULTISELECTION DEFAULT
+    # DIR = '/home/aria/landslide/MDRUNS/IVAN_IGPS'
+    # output_folder = '/home/aria/landslide/RESULTS/GUIDELINES/NEW_ALGORITHM/TEST'
+    # name1 = 'apo'
+    # name2 = 'holo'
+    # traj1=[jn(DIR, 'prot_apo_sim{0}_s10.dcd'.format(i)) for i in range(1,5)]
+    # traj2=[jn(DIR, 'prot_prfar_sim{0}_s10.dcd'.format(i)) for i in range(1,5)]
+    # topo = jn(DIR, 'prot.prmtop')
+    # create_default(traj1, traj2, topo, output_folder, name1, name2)
 
 
 
