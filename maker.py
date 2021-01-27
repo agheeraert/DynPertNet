@@ -110,7 +110,7 @@ class AANet():
         self.net = nx.relabel_nodes(self.net, self.id2label, copy=False)
 
 
-    def create_atomic(self, traj,  baseSelection, topo=None, cutoff=5):
+    def create_atomic_old(self, traj,  baseSelection, topo=None, cutoff=5):
         """Function creating the atomic contact network with a desired base selection.
         Parameters: traj: str or list of str: path trajectories to load
         topo: str: path of topology to use
@@ -143,7 +143,7 @@ class AANet():
             self.atomic_avg += mat
         self.atomic_avg /= self.t.n_frames
 
-    def create_atomic_c(self, traj, baseSelection, topo=None, cutoff=5, chunk=10000):
+    def create_atomic(self, traj, baseSelection, topo=None, cutoff=5, chunk=10000):
         """Function creating the atomic contact network with a desired base selection in chunks
         Parameters: traj: str or list of str: path trajectories to load
         topo: str: path of topology to use
