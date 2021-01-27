@@ -143,6 +143,43 @@ class AANet():
             self.atomic_avg += mat
         self.atomic_avg /= self.t.n_frames
 
+    def create_atomic_c(self, traj, baseSelection, topo=None, cutoff=5, chunk=10000):
+        """Function creating the atomic contact network with a desired base selection in chunks
+        Parameters: traj: str or list of str: path trajectories to load
+        topo: str: path of topology to use
+        baseSelection: str: base selection on which to compute the atomic network. To save computation time, this should be the 
+        smallest selection that includes all the selections in the list.
+        """
+        firstpass = True
+        for chunk in md.iterload(traj, topo=topo, chunk=chunk):
+
+            if firstpass:
+                self.n_atoms, self.n_residues = chunk.topology.n_atoms, chunk.topology.n_residues
+                labels = list(map(label, chunk.topology.residues))
+                self.id2label = dict(zip(list(range(self.n_residues)), labels))
+                firstpass = False
+                self.atomic_avg = csr_matrix((self.n_atoms, self.n_atoms))
+
+            #Slicing atoms of interest
+            if baseSelection != 'all':
+                chunk = chunk.atom_slice(chunk.topology.select(baseSelection))
+
+            coords = chunk.xyz
+            atomicContacts = []
+            for frame in tqdm(range(chunk.n_frames)):
+                #Here we're using the cPython KDTree algorithm to get the neighbors
+                tree = cKDTree(coords[frame])
+                pairs = tree.query_pairs(r=cutoff/10.) #Cutoff is in Angstrom but mdtraj uses nm
+                #Creating sparse CSR matrix
+                data = np.ones(len(pairs))
+                pairs = np.array(list(pairs))
+                atomicContacts.append(csr_matrix((data, (pairs[:,0], pairs[:,1])), shape=[self.n_atoms, self.n_atoms]))            
+            
+            #Computing average atomic network from list of csr matrices
+            for mat in atomicContacts:
+                self.atomic_avg += mat
+            self.atomic_avg /= chunk.n_frames      
+
     def save_atomic(self, output):
         """Saves atomic network to the desired output
         Parameters: output: str, path where to output the file"""
