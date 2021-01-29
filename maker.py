@@ -143,42 +143,49 @@ class AANet():
             self.atomic_avg += mat
         self.atomic_avg /= self.t.n_frames
 
-    def create_atomic(self, traj, baseSelection, topo=None, cutoff=5, chunk=10000):
+    def create_atomic(self, trajs, baseSelection, topo=None, cutoff=5, chunk=10000):
         """Function creating the atomic contact network with a desired base selection in chunks
         Parameters: traj: str or list of str: path trajectories to load
         topo: str: path of topology to use
         baseSelection: str: base selection on which to compute the atomic network. To save computation time, this should be the 
         smallest selection that includes all the selections in the list.
         """
-        firstpass = True
-        for chunk in md.iterload(traj, topo=topo, chunk=chunk):
+        firstpass, total = True, []
+        for traj in trajs:
+            for chunk in md.iterload(traj, topo=topo, chunk=chunk):
 
-            if firstpass:
-                self.n_atoms, self.n_residues = chunk.topology.n_atoms, chunk.topology.n_residues
-                labels = list(map(label, chunk.topology.residues))
-                self.id2label = dict(zip(list(range(self.n_residues)), labels))
-                firstpass = False
-                self.atomic_avg = csr_matrix((self.n_atoms, self.n_atoms))
+                if firstpass:
+                    self.n_atoms, self.n_residues = chunk.topology.n_atoms, chunk.topology.n_residues
+                    labels = list(map(label, chunk.topology.residues))
+                    self.id2label = dict(zip(list(range(self.n_residues)), labels))
+                    firstpass = False
+                    self.atomic_avg = csr_matrix((self.n_atoms, self.n_atoms))
 
-            #Slicing atoms of interest
-            if baseSelection != 'all':
-                chunk = chunk.atom_slice(chunk.topology.select(baseSelection))
+                #Slicing atoms of interest
+                if baseSelection != 'all':
+                    chunk = chunk.atom_slice(chunk.topology.select(baseSelection))
 
-            coords = chunk.xyz
-            atomicContacts = []
-            for frame in tqdm(range(chunk.n_frames)):
-                #Here we're using the cPython KDTree algorithm to get the neighbors
-                tree = cKDTree(coords[frame])
-                pairs = tree.query_pairs(r=cutoff/10.) #Cutoff is in Angstrom but mdtraj uses nm
-                #Creating sparse CSR matrix
-                data = np.ones(len(pairs))
-                pairs = np.array(list(pairs))
-                atomicContacts.append(csr_matrix((data, (pairs[:,0], pairs[:,1])), shape=[self.n_atoms, self.n_atoms]))            
-            
-            #Computing average atomic network from list of csr matrices
-            for mat in atomicContacts:
-                self.atomic_avg += mat
-            self.atomic_avg /= chunk.n_frames      
+                coords = chunk.xyz
+                atomicContacts = []
+                for frame in tqdm(range(chunk.n_frames)):
+                    #Here we're using the cPython KDTree algorithm to get the neighbors
+                    tree = cKDTree(coords[frame])
+                    pairs = tree.query_pairs(r=cutoff/10.) #Cutoff is in Angstrom but mdtraj uses nm
+                    #Creating sparse CSR matrix
+                    data = np.ones(len(pairs))
+                    pairs = np.array(list(pairs))
+                    atomicContacts.append(csr_matrix((data, (pairs[:,0], pairs[:,1])), shape=[self.n_atoms, self.n_atoms]))            
+                
+                #Computing average atomic network from list of csr matrices
+                chunk_avg = []
+                for mat in atomicContacts:
+                    chunk_avg += mat
+                chunk_avg = csr_matrix(chunk_avg)
+                chunk_avg /= chunk.n_frames
+                total.append((chunk_avg, chunk.n_frames))
+        self.n_frames = np.sum([elt[1] for elt in total])
+        for mat, fact in total:
+            self.atomic_avg[mat.nonzero()] += mat.data*(fact/self.n_frames)
 
     def save_atomic(self, output):
         """Saves atomic network to the desired output
@@ -255,7 +262,7 @@ def load_aanet(input):
 def create_aanet_multiselection(traj, selectionList, topo=None, selection='all', cutoff=5, output_atomic=None, output_list = None):
     selection = selection.replace("not hydrogen", "!(name =~'H.*')")
     aanet = AANet()
-    aanet.create_atomic(traj, baseSelection=selection, topo=topo, cutoff=cutoff)
+    aanet.create_atomic(traj, baseSelection=selection, topo=topo, cutoff=cutoff, chunk=10000)
     if output_atomic:
         aanet.save_atomic(output_atomic)
     networks = aanet.create_list(selectionList)
