@@ -152,8 +152,9 @@ class AANet():
         """
         firstpass, total = True, []
         for traj in trajs:
-            for chunk in md.iterload(traj, topo=topo, chunk=chunk):
-
+            print('Treating traj {}'.format(traj))
+            for i, chunk in enumerate(md.iterload(traj, topo=topo, chunk=chunk)):
+                print('Treating chunk {}'.format(i))
                 if firstpass:
                     self.n_atoms, self.n_residues = chunk.topology.n_atoms, chunk.topology.n_residues
                     labels = list(map(label, chunk.topology.residues))
