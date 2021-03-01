@@ -5,13 +5,13 @@ from Bio.PDB.Polypeptide import aa1, aa3
 three2one = dict(zip(aa3, aa1))
 t2o = lambda X: three2one[X] if X in three2one else X[0] 
 relabel = lambda X: t2o(X[:3])+X[3:-1]+':'+X[-1]
-selection = lambda X: " or resi "+X[3:-1]+" and n. CA"
+selection = lambda X: " or resi "+X[3:-1]+" and n. CA or n. C"
 
 
 
 def drawNetwork(path, userSelection='all', r=1, edge_norm=None, alpha=0.5, 
                 node_color=(0.6, 0.6, 0.6), edge_color1 = (1, 0, 0), 
-                edge_color2 = (0, 0, 1), labelling='1',
+                edge_color2 = (0, 0, 1), labelling='0',
                 threshold=0):
     '''
     Draws a NetworkX network on the PyMol structure
@@ -21,14 +21,13 @@ def drawNetwork(path, userSelection='all', r=1, edge_norm=None, alpha=0.5,
     # Building position -- name correspondance
     stored.posCA = []
     stored.names = []
-    userSelection = userSelection + " and n. CA"
+    userSelection = userSelection + " and n. CA or n. C"
     cmd.iterate_state(1, selector.process(userSelection), "stored.posCA.append([x,y,z])")
-    cmd.iterate(userSelection, 'stored.names.append(resn+resi+chain)') 
+    cmd.iterate(userSelection, 'stored.names.append(resn+resi+chain)')
     stored.labels = list(map(relabel, stored.names))
     stored.resid = list(map(selection, stored.names))
     node2id = dict(zip(stored.labels, stored.resid))
     node2CA = dict(zip(stored.labels, stored.posCA))
-
     # Getting graph
     net = nx.read_gpickle(path)
 
@@ -50,15 +49,21 @@ def drawNetwork(path, userSelection='all', r=1, edge_norm=None, alpha=0.5,
 
     if edge_norm == None:
         edge_norm = max([net.edges()[(u, v)]['weight'] for u, v in net.edges()])/r
-
     obj1, obj2, nodelist = [], [], []
     for u, v in net.edges():
         radius = net[u][v]['weight']/edge_norm
         if abs(net[u][v]['weight']) >= threshold:
-            if net[u][v]['color'] == 'r':
-                obj1+=[CYLINDER, *node2CA[u], *node2CA[v], radius, *edge_color1, *edge_color1]
+            if 'color' in net[u][v]: 
+                if net[u][v]['color'] == 'r':
+                    obj1+=[CYLINDER, *node2CA[u], *node2CA[v], radius, *edge_color1, *edge_color1]
+                else:
+                    obj2+=[CYLINDER, *node2CA[u], *node2CA[v], radius, *edge_color2, *edge_color2]
             else:
-                obj2+=[CYLINDER, *node2CA[u], *node2CA[v], radius, *edge_color2, *edge_color2]
+                if net[u][v]['weight'] <= 0:
+                    obj1+=[CYLINDER, *node2CA[u], *node2CA[v], radius, *edge_color1, *edge_color1]
+                else:
+                    obj2+=[CYLINDER, *node2CA[u], *node2CA[v], radius, *edge_color2, *edge_color2]
+
             nodelist+=[u, v]
 
     #Drawing nodes
