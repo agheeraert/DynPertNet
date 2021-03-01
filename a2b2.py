@@ -25,7 +25,7 @@ for replica in range(1,4):
     for selection, output_folder in zip(selections, L_output):
         n_cpu = multiprocessing.cpu_count()
         pool = multiprocessing.Pool(processes=min(n_cpu, len(traj_list)))
-        new_trajlist = [traj[replica] for traj in traj_list]
+        new_trajlist = [[traj[replica]] for traj in traj_list]
         print(new_trajlist)
         L_output_atomic = [jn(OUTPUT_FOLDER, '{0}_{1}.anpy'.format(name, replica)) for name in name_list]
         networks = pool.starmap(create_aanet_multiselection, zip(new_trajlist, [None]*len(traj_list), topo_list, ['all']*len(traj_list), [5]*len(traj_list), L_output_atomic))
