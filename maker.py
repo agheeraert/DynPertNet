@@ -153,22 +153,22 @@ class AANet():
         firstpass, total = True, []
         for traj in trajs:
             print('Treating traj {}'.format(traj))
-            for i, chunk in enumerate(md.iterload(traj, topo=topo, chunk=chunk)):
+            for i, tr in enumerate(md.iterload(traj, top=topo, chunk=chunk)):
                 print('Treating chunk {}'.format(i))
                 if firstpass:
-                    self.n_atoms, self.n_residues = chunk.topology.n_atoms, chunk.topology.n_residues
-                    labels = list(map(label, chunk.topology.residues))
+                    self.n_atoms, self.n_residues = tr.topology.n_atoms, tr.topology.n_residues
+                    labels = list(map(label, tr.topology.residues))
                     self.id2label = dict(zip(list(range(self.n_residues)), labels))
                     firstpass = False
                     self.atomic_avg = csr_matrix((self.n_atoms, self.n_atoms))
 
                 #Slicing atoms of interest
                 if baseSelection != 'all':
-                    chunk = chunk.atom_slice(chunk.topology.select(baseSelection))
+                    tr = tr.atom_slice(tr.topology.select(baseSelection))
 
-                coords = chunk.xyz
+                coords = tr.xyz
                 atomicContacts = []
-                for frame in tqdm(range(chunk.n_frames)):
+                for frame in tqdm(range(tr.n_frames)):
                     #Here we're using the cPython KDTree algorithm to get the neighbors
                     tree = cKDTree(coords[frame])
                     pairs = tree.query_pairs(r=cutoff/10.) #Cutoff is in Angstrom but mdtraj uses nm
@@ -178,12 +178,12 @@ class AANet():
                     atomicContacts.append(csr_matrix((data, (pairs[:,0], pairs[:,1])), shape=[self.n_atoms, self.n_atoms]))            
                 
                 #Computing average atomic network from list of csr matrices
-                chunk_avg = []
+                chunk_avg = np.zeros((self.n_atoms, self.n_atoms)) 
                 for mat in atomicContacts:
-                    chunk_avg += mat
+                    chunk_avg[mat.nonzero()] += mat.data
                 chunk_avg = csr_matrix(chunk_avg)
-                chunk_avg /= chunk.n_frames
-                total.append((chunk_avg, chunk.n_frames))
+                chunk_avg /= tr.n_frames
+                total.append((chunk_avg, tr.n_frames))
         self.n_frames = np.sum([elt[1] for elt in total])
         for mat, fact in total:
             self.atomic_avg[mat.nonzero()] += mat.data*(fact/self.n_frames)

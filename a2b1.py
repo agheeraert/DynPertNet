@@ -1,4 +1,3 @@
-from home.aria.DynPertNet.a2b2 import OUTPUT_FOLDER
 from dynpertnet import *
 from maker import *
 from os.path import join as jn
